@@ -5,7 +5,7 @@ import requests
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="EGX Universal Live API 2026")
+app = FastAPI(title="EGX Direct Universal API 2026")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,23 +24,27 @@ def calculate_graham_fair_value(eps: float, book_value: float) -> float:
 
 @app.get("/")
 def read_root():
-    return {"status": "success", "message": "سيرفر البورصة المصرية العالمي الشامل يعمل بنجاح"}
+    return {"status": "success", "message": "سيرفر البورصة المصرية العالمي المباشر يعمل بنجاح"}
 
-# قمنا بتغيير المسار هنا إلى /egx/ لكسر كاش سيرفر Vercel القديم نهائياً
-@app.get("/egx/{symbol}")
+# قمنا بإلغاء المسارات الفرعية كلياً لجعل الطلب يمر مباشرة بدون عوائق كاش Vercel
+@app.get("/{symbol}")
 def get_stock(symbol: str, response: Response):
-    # إجبار جدار الحماية على عدم تخزين أي كاش لتحديث البيانات للحظي في الموبايل
+    # إجبار جدار الحماية على عدم تخزين كاش لضمان تسليم أسعار فورية للتطبيق
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, proxy-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     
     clean_symbol = symbol.upper().strip()
     
+    # تفادي طلبات المتصفح التلقائية المعطوبة (Favicon) لمنع انهيار الفانكشن
+    if clean_symbol in ["FAVICON.ICO", "FAVICON.PNG"]:
+        return {}
+
     # معالجة ذكية لسهم هيرميس التاريخي
     if clean_symbol == "HRHO":
         clean_symbol = "EFGH"
 
-    # التركيب التلقائي للرموز العالمية للبورصة المصرية بدون قاموس يدوي لدعم كافة الأسهم
+    # التركيب التلقائي للرموز العالمية للبورصة المصرية بدون قاموس يدوي لدعم كافة الأسهم المدرجة
     yahoo_ticker = f"{clean_symbol}.CA"
 
     live_url = f"https://yahoo.com{yahoo_ticker}"
@@ -53,10 +57,10 @@ def get_stock(symbol: str, response: Response):
 
     try:
         # جلب السعر اللحظي الفعلي المحدث الآن في نفس الجلسة
-        res = requests.get(live_url, headers=headers, params=params, timeout=7)
+        res = requests.get(live_url, headers=headers, params=params, timeout=8)
         
         if res.status_code != 200:
-            raise HTTPException(status_code=404, detail=f"رمز السهم {clean_symbol} غير مدرج في البورصة أو المزود معطل")
+            raise HTTPException(status_code=404, detail=f"رمز السهم {clean_symbol} غير مدرج في البورصة أو المزود معطل حالياً")
             
         json_data = res.json()
         chart_result = json_data.get('chart', {}).get('result', [{}])
@@ -66,12 +70,12 @@ def get_stock(symbol: str, response: Response):
             
         meta = chart_result[0].get('meta', {})
         
-        # استخراج السعر اللحظي الفعلي ونسبة التغير بدقة
+        # استخراج السعر اللحظي الفعلي ونسبة التغير بدقة وبدون كاش قديم
         current_price = meta.get('regularMarketPrice')
         previous_close = meta.get('chartPreviousClose')
 
         if not current_price:
-            raise HTTPException(status_code=502, detail="فشل استخراج السعر الحالي من الجلسة الحالية")
+            raise HTTPException(status_code=502, detail="فشل استخراج السعر الحالي من الجلسة")
 
         daily_change_percent = 0.0
         if current_price and previous_close:
@@ -97,7 +101,7 @@ def get_stock(symbol: str, response: Response):
 
         return {
             "symbol": clean_symbol,
-            "status": "live_realtime_universal",
+            "status": "live_realtime_direct",
             "currentPrice": current_price,
             "dailyChangePercent": daily_change_percent,
             "eps": eps,
