@@ -29,6 +29,7 @@ def read_root():
 
 @app.get("/stocks/{symbol}")
 def get_stock(symbol: str, response: Response):
+    # منع تخزين الكاش لضمان تسليم بيانات حية ودقيقة لتطبيق الموبايل
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, proxy-revalidate"
     
     clean_symbol = symbol.upper().strip()
@@ -37,7 +38,7 @@ def get_stock(symbol: str, response: Response):
     if not yahoo_ticker:
         raise HTTPException(status_code=400, detail=f"رمز السهم غير مسجل: {clean_symbol}")
 
-    # الرابط المصحح بدقة للاتصال بالـ API الخلفي لياهو فاينانشال
+    # الرابط الرسمي الصافي والمباشر لـ API ياهو فاينانشال العالمي
     url = f"https://yahoo.com{yahoo_ticker}"
     
     headers = {
@@ -53,24 +54,24 @@ def get_stock(symbol: str, response: Response):
         res = requests.get(url, headers=headers, params=params, timeout=10)
         
         if res.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"المزود العالمي يرفض الطلب. كود الخطأ: {res.status_code}")
+            raise HTTPException(status_code=502, detail=f"المزود العالمي رفض الطلب بكود: {res.status_code}")
             
-        data = res.json()
-        result_list = data.get('quoteSummary', {}).get('result', [])
+        json_data = res.json()
+        result_list = json_data.get('quoteSummary', {}).get('result', [])
         
         if not result_list:
-            raise HTTPException(status_code=502, detail="لم يتم العثور على بيانات لهذا السهم في البورصة العالمية")
+            raise HTTPException(status_code=502, detail="لم يتم العثور على بيانات لهذا السهم")
             
         result = result_list[0]
         price_mod = result.get('price', {})
         key_stats = result.get('defaultKeyStatistics', {})
 
-        # استخراج الأسعار بشكل آمن تماماً
+        # استخراج الأسعار بشكل آمن تماماً وبدون أخطاء
         current_price = price_mod.get('regularMarketPrice', {}).get('raw') or price_mod.get('currentPrice', {}).get('raw')
         previous_close = price_mod.get('regularMarketPreviousClose', {}).get('raw')
 
         if not current_price:
-            raise HTTPException(status_code=502, detail="فشل استخراج سعر السهم الحالي من البيانات المستلمة")
+            raise HTTPException(status_code=502, detail="فشل استخراج السعر الحالي من المزود")
 
         daily_change_percent = 0.0
         if current_price and previous_close:
@@ -79,6 +80,7 @@ def get_stock(symbol: str, response: Response):
         eps = key_stats.get('trailingEps', {}).get('raw', 0.0)
         book_value = key_stats.get('bookValue', {}).get('raw', 0.0)
 
+        # حساب معادلة جراهام الاستثمارية
         fair_value = calculate_graham_fair_value(eps, book_value)
         is_undervalued = fair_value > current_price if fair_value > 0 else False
         
