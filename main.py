@@ -17,7 +17,7 @@ app.add_middleware(
 )
 
 def calculate_graham_fair_value(eps: float, book_value: float) -> float:
-    """معادلة جراهام لحساب القيمة العادلة"""
+    """معادلة جراهام القياسية لحساب القيمة العادلة للسهم"""
     if not eps or eps <= 0 or not book_value or book_value <= 0:
         return 0.0
     product = 22.5 * eps * book_value
@@ -25,79 +25,74 @@ def calculate_graham_fair_value(eps: float, book_value: float) -> float:
 
 @app.get("/")
 def read_root():
-    return {"status": "success", "message": "سيرفر البورصة المصرية الحي يعمل بنجاح"}
+    return {"status": "success", "message": "سيرفر البورصة المصرية اللحظي الحقيقي يعمل بنجاح"}
 
 @app.get("/stocks/{symbol}")
 def get_stock(symbol: str, response: Response):
+    # إجبار السيرفر على منع الكاش تماماً لتحديث البيانات اللحظية في التطبيق
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, proxy-revalidate"
     
     clean_symbol = symbol.upper().strip()
-    
-    # 1. جلب السعر اللحظي المباشر من خوادم TradingView المفتوحة (لا تحظر Vercel)
-    tv_url = "https://tradingview.com"
-    tv_params = {'text': f"EGX:{clean_symbol}", 'lang': 'en'}
-    
-    current_price = None
-    daily_change_percent = 0.0
-    
-    try:
-        tv_res = requests.get(tv_url, params=tv_params, timeout=3)
-        if tv_res.status_code == 200:
-            tv_data = tv_res.json()
-            candidates = tv_data.get('candidates', [])
-            for c in candidates:
-                if c.get('exchange') == 'EGX' and c.get('symbol') == clean_symbol:
-                    current_price = c.get('last_price')
-                    daily_change_percent = round(c.get('chp', 0.0), 2)
-                    break
-    except Exception:
-        pass # إذا فشل تريدنج فيو سنحاول مع ياهو
-
-    # 2. جلب المؤشرات المالية (EPS و Book Value) من ياهو فاينانشال
     yahoo_ticker = STOCK_MAP.get(clean_symbol)
-    eps = 0.0
-    book_value = 0.0
+
+    if not yahoo_ticker:
+        raise HTTPException(status_code=400, detail=f"رمز السهم غير مسجل: {clean_symbol}")
+
+    # الاستعانة بمحرك الأسعار المفتوح المباشر (تخطي حظر خوادم Vercel تماماً وبدون بروكسي)
+    url = f"https://yahoo.com{yahoo_ticker}"
     
-    if yahoo_ticker:
-        yf_url = f"https://yahoo.com{yahoo_ticker}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        params = {'modules': 'defaultKeyStatistics,price'}
-        try:
-            yf_res = requests.get(yf_url, headers=headers, params=params, timeout=3)
-            if yf_res.status_code == 200:
-                yf_data = yf_res.json()
-                result = yf_data.get('quoteSummary', {}).get('result', [{}])[0]
-                
-                # لو تريدنج فيو مجابش السعر، ناخده من ياهو كبديل
-                if not current_price:
-                    current_price = result.get('price', {}).get('regularMarketPrice', {}).get('raw')
-                    prev_close = result.get('price', {}).get('regularMarketPreviousClose', {}).get('raw')
-                    if current_price and prev_close:
-                        daily_change_percent = round(((current_price - prev_close) / prev_close) * 100, 2)
-                
-                eps = result.get('defaultKeyStatistics', {}).get('trailingEps', {}).get('raw', 0.0)
-                book_value = result.get('defaultKeyStatistics', {}).get('bookValue', {}).get('raw', 0.0)
-        except Exception:
-            # قيم افتراضية أساسية في حال فشل ياهو تماماً في جلب المؤشرات المالية
-            eps, book_value = 4.5, 20.0
-
-    # إذا فشلت كل المحاولات في جلب السعر الحالي
-    if not current_price:
-        raise HTTPException(status_code=502, detail="جميع المزودات معطلة حالياً، يرجى المحاولة لاحقاً")
-
-    # حساب جراهام بناءً على السعر اللحظي الحقيقي
-    fair_value = calculate_graham_fair_value(eps, book_value)
-    is_undervalued = fair_value > current_price if fair_value > 0 else False
-    fair_value_deviation = round(((fair_value - current_price) / current_price) * 100, 2) if fair_value > 0 else 0.0
-
-    return {
-        "symbol": clean_symbol,
-        "currentPrice": current_price,
-        "dailyChangePercent": daily_change_percent,
-        "eps": eps,
-        "bookValuePerShare": book_value,
-        "fairValue": fair_value,
-        "isUndervalued": is_undervalued,
-        "fairValueDeviationPercent": fair_value_deviation,
-        "lastUpdated": int(time.time() * 1000)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
     }
+
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        
+        if res.status_code != 200:
+            raise HTTPException(status_code=502, detail="فشل الاتصال بالمزود العالمي للأسعار")
+            
+        json_data = res.json()
+        option_chain = json_data.get('optionChain', {})
+        result_list = option_chain.get('result', [])
+        
+        if not result_list:
+            raise HTTPException(status_code=502, detail="لم يتم العثور على بيانات حية لهذا السهم")
+            
+        quote = result_list[0].get('quote', {})
+        
+        # استخراج السعر اللحظي الحالي ونسبة التغير بدقة وبدون أي داتا قديمة
+        current_price = quote.get('regularMarketPrice') or quote.get('currentPrice')
+        daily_change_percent = round(quote.get('regularMarketChangePercent', 0.0), 2)
+        
+        if not current_price:
+            raise HTTPException(status_code=502, detail="فشل استخراج السعر اللحظي الحالي")
+
+        # استخراج المؤشرات الأساسية لحساب جراهام (EPS و القيمة الدفترية)
+        eps = quote.get('epsTrailingTwelveMonths', 0.0)
+        book_value = quote.get('bookValue', 0.0)
+
+        # حساب القيمة العادلة بناءً على السعر اللحظي الجديد
+        fair_value = calculate_graham_fair_value(eps, book_value)
+        is_undervalued = fair_value > current_price if fair_value > 0 else False
+        
+        fair_value_deviation = 0.0
+        if fair_value > 0:
+            fair_value_deviation = round(((fair_value - current_price) / current_price) * 100, 2)
+
+        return {
+            "symbol": clean_symbol,
+            "currentPrice": current_price,
+            "dailyChangePercent": daily_change_percent,
+            "dayLow": quote.get('regularMarketDayLow'),
+            "dayHigh": quote.get('regularMarketDayHigh'),
+            "eps": eps,
+            "bookValuePerShare": book_value,
+            "fairValue": fair_value,
+            "isUndervalued": is_undervalued,
+            "fairValueDeviationPercent": fair_value_deviation,
+            "lastUpdated": int(time.time() * 1000)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"خطأ في جلب الأسعار اللحظية: {str(e)}")
