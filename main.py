@@ -37,12 +37,13 @@ def get_stock(symbol: str, response: Response):
     if not yahoo_ticker:
         raise HTTPException(status_code=400, detail=f"رمز السهم غير مسجل: {clean_symbol}")
 
-    # الالتفاف الذكي: تزوير هيدرز المتصفح بالكامل لمنع حظر خوادم Vercel
+    # الرابط المصحح بدقة للاتصال بالـ API الخلفي لياهو فاينانشال
     url = f"https://yahoo.com{yahoo_ticker}"
+    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Accept': 'application/json',
-        'Referer': 'https://finance.yahoo.com/'
+        'Referer': 'https://yahoo.com'
     }
     params = {
         'modules': 'price,defaultKeyStatistics'
@@ -52,14 +53,15 @@ def get_stock(symbol: str, response: Response):
         res = requests.get(url, headers=headers, params=params, timeout=10)
         
         if res.status_code != 200:
-            raise HTTPException(status_code=502, detail="المزود العالمي يرفض الطلب حالياً")
+            raise HTTPException(status_code=502, detail=f"المزود العالمي يرفض الطلب. كود الخطأ: {res.status_code}")
             
         data = res.json()
-        result = data.get('quoteSummary', {}).get('result', [{}])[0]
+        result_list = data.get('quoteSummary', {}).get('result', [])
         
-        if not result:
-            raise HTTPException(status_code=502, detail="لم يتم العثور على بيانات للسهم")
-
+        if not result_list:
+            raise HTTPException(status_code=502, detail="لم يتم العثور على بيانات لهذا السهم في البورصة العالمية")
+            
+        result = result_list[0]
         price_mod = result.get('price', {})
         key_stats = result.get('defaultKeyStatistics', {})
 
@@ -68,7 +70,7 @@ def get_stock(symbol: str, response: Response):
         previous_close = price_mod.get('regularMarketPreviousClose', {}).get('raw')
 
         if not current_price:
-            raise HTTPException(status_code=502, detail="فشل استخراج سعر السهم الحالي")
+            raise HTTPException(status_code=502, detail="فشل استخراج سعر السهم الحالي من البيانات المستلمة")
 
         daily_change_percent = 0.0
         if current_price and previous_close:
