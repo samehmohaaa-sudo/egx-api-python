@@ -5,7 +5,7 @@ import requests
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="EGX Universal Tracker API")
+app = FastAPI(title="EGX Universal Live API 2026")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,22 +24,23 @@ def calculate_graham_fair_value(eps: float, book_value: float) -> float:
 
 @app.get("/")
 def read_root():
-    return {"status": "success", "message": "سيرفر البورصة المصرية العالمي الشامل يعمل بنجاح ومستعد للتطبيق"}
+    return {"status": "success", "message": "سيرفر البورصة المصرية العالمي الشامل يعمل بنجاح"}
 
-@app.get("/stocks/{symbol}")
+# قمنا بتغيير المسار هنا إلى /egx/ لكسر كاش سيرفر Vercel القديم نهائياً
+@app.get("/egx/{symbol}")
 def get_stock(symbol: str, response: Response):
-    # إلغاء الكاش لضمان تحديث الأسعار اللحظية في الموبايل
+    # إجبار جدار الحماية على عدم تخزين أي كاش لتحديث البيانات للحظي في الموبايل
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, proxy-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     
-    # تنظيف الرمز الممرر من التطبيق وتحويله لحروف كبيرة
     clean_symbol = symbol.upper().strip()
     
     # معالجة ذكية لسهم هيرميس التاريخي
     if clean_symbol == "HRHO":
         clean_symbol = "EFGH"
 
-    # التركيب التلقائي للرموز العالمية للبورصة المصرية بدون الحاجة لقاموس يدوي
-    # أي رمز يكتبه المستخدم سيتم إلحاق اللاحقة المصرية الرسمية به فوراً
+    # التركيب التلقائي للرموز العالمية للبورصة المصرية بدون قاموس يدوي لدعم كافة الأسهم
     yahoo_ticker = f"{clean_symbol}.CA"
 
     live_url = f"https://yahoo.com{yahoo_ticker}"
@@ -51,17 +52,17 @@ def get_stock(symbol: str, response: Response):
     params = {'interval': '1m', 'range': '1d'}
 
     try:
-        # 1. جلب السعر اللحظي الفعلي المحدث الآن في نفس الجلسة
+        # جلب السعر اللحظي الفعلي المحدث الآن في نفس الجلسة
         res = requests.get(live_url, headers=headers, params=params, timeout=7)
         
         if res.status_code != 200:
-            raise HTTPException(status_code=404, detail=f"رمز السهم {clean_symbol} غير مدرج في البورصة المصرية أو المزود معطل")
+            raise HTTPException(status_code=404, detail=f"رمز السهم {clean_symbol} غير مدرج في البورصة أو المزود معطل")
             
         json_data = res.json()
         chart_result = json_data.get('chart', {}).get('result', [{}])
         
         if not chart_result or chart_result == [None]:
-            raise HTTPException(status_code=404, detail=f"لم يتم العثور على بيانات حية للسهم الممرر: {clean_symbol}")
+            raise HTTPException(status_code=404, detail=f"لم يتم العثور على بيانات حية لسهم: {clean_symbol}")
             
         meta = chart_result[0].get('meta', {})
         
@@ -70,13 +71,13 @@ def get_stock(symbol: str, response: Response):
         previous_close = meta.get('chartPreviousClose')
 
         if not current_price:
-            raise HTTPException(status_code=502, detail="فشل استخراج السعر الحالي من الجلسة")
+            raise HTTPException(status_code=502, detail="فشل استخراج السعر الحالي من الجلسة الحالية")
 
         daily_change_percent = 0.0
         if current_price and previous_close:
             daily_change_percent = round(((current_price - previous_close) / previous_close) * 100, 2)
 
-        # 2. جلب المؤشرات الاستثمارية (EPS و Book Value) لحساب معادلة جراهام
+        # جلب المؤشرات الاستثمارية (EPS و Book Value) لحساب معادلة جراهام
         eps = 4.2
         book_value = 20.0
         
@@ -88,16 +89,15 @@ def get_stock(symbol: str, response: Response):
                 eps = quote.get('epsTrailingTwelveMonths', eps)
                 book_value = quote.get('bookValue', book_value)
         except Exception:
-            pass # الحفاظ الصارم على السعر الحي الفعلي حتى لو تعطلت المؤشرات المالية الثانوية
+            pass 
 
-        # حساب القيمة العادلة والمقارنات المالية للتطبيق
         fair_value = calculate_graham_fair_value(eps, book_value)
         is_undervalued = fair_value > current_price if fair_value > 0 else False
         fair_value_deviation = round(((fair_value - current_price) / current_price) * 100, 2) if fair_value > 0 else 0.0
 
         return {
             "symbol": clean_symbol,
-            "status": "live_universal",
+            "status": "live_realtime_universal",
             "currentPrice": current_price,
             "dailyChangePercent": daily_change_percent,
             "eps": eps,
@@ -111,4 +111,4 @@ def get_stock(symbol: str, response: Response):
     except HTTPException as he:
         raise he
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"خطأ في معالجة البيانات اللحظية: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"خطأ في معالجة البيانات: {str(e)}")
