@@ -1,10 +1,14 @@
 # main.py
+import os
 import math
 import time
-import requests
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+import yfinance as yf
 from config import STOCK_MAP
+
+# حل مشكلة النظام المقروء فقط (Read-only) على خوادم Vercel وتوجيه الكاش لمجلد الـ /tmp
+os.environ["YFINANCE_CACHE_DIR"] = "/tmp/py-yfinance"
 
 app = FastAPI()
 
@@ -29,7 +33,7 @@ def read_root():
 
 @app.get("/stocks/{symbol}")
 def get_stock(symbol: str, response: Response):
-    # إجبار السيرفر على منع الكاش تماماً لتحديث البيانات اللحظية في التطبيق
+    # إجبار السيرفر على منع الكاش لضمان تسليم بيانات حية ودقيقة
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, proxy-revalidate"
     
     clean_symbol = symbol.upper().strip()
@@ -38,41 +42,26 @@ def get_stock(symbol: str, response: Response):
     if not yahoo_ticker:
         raise HTTPException(status_code=400, detail=f"رمز السهم غير مسجل: {clean_symbol}")
 
-    # الاستعانة بمحرك الأسعار المفتوح المباشر (تخطي حظر خوادم Vercel تماماً وبدون بروكسي)
-    url = f"https://yahoo.com{yahoo_ticker}"
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
-    }
-
     try:
-        res = requests.get(url, headers=headers, timeout=5)
-        
-        if res.status_code != 200:
-            raise HTTPException(status_code=502, detail="فشل الاتصال بالمزود العالمي للأسعار")
-            
-        json_data = res.json()
-        option_chain = json_data.get('optionChain', {})
-        result_list = option_chain.get('result', [])
-        
-        if not result_list:
-            raise HTTPException(status_code=502, detail="لم يتم العثور على بيانات حية لهذا السهم")
-            
-        quote = result_list[0].get('quote', {})
-        
-        # استخراج السعر اللحظي الحالي ونسبة التغير بدقة وبدون أي داتا قديمة
-        current_price = quote.get('regularMarketPrice') or quote.get('currentPrice')
-        daily_change_percent = round(quote.get('regularMarketChangePercent', 0.0), 2)
-        
+        # استخدام المكتبة الرسمية مباشرة والتي تتكفل ببناء الرابط الصحيح تلقائياً بدون أخطاء إملائية
+        ticker = yf.Ticker(yahoo_ticker)
+        info = ticker.info
+
+        # استخراج الأسعار بشكل آمن
+        current_price = info.get('regularMarketPrice') or info.get('currentPrice')
+        previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+
         if not current_price:
-            raise HTTPException(status_code=502, detail="فشل استخراج السعر اللحظي الحالي")
+            raise HTTPException(status_code=502, detail="فشل استخراج السعر الحالي من المزود")
 
-        # استخراج المؤشرات الأساسية لحساب جراهام (EPS و القيمة الدفترية)
-        eps = quote.get('epsTrailingTwelveMonths', 0.0)
-        book_value = quote.get('bookValue', 0.0)
+        daily_change_percent = 0.0
+        if current_price and previous_close:
+            daily_change_percent = round(((current_price - previous_close) / previous_close) * 100, 2)
 
-        # حساب القيمة العادلة بناءً على السعر اللحظي الجديد
+        eps = info.get('trailingEps', 0.0)
+        book_value = info.get('bookValue', 0.0)
+
+        # حساب معادلة جراهام الاستثمارية
         fair_value = calculate_graham_fair_value(eps, book_value)
         is_undervalued = fair_value > current_price if fair_value > 0 else False
         
@@ -84,8 +73,8 @@ def get_stock(symbol: str, response: Response):
             "symbol": clean_symbol,
             "currentPrice": current_price,
             "dailyChangePercent": daily_change_percent,
-            "dayLow": quote.get('regularMarketDayLow'),
-            "dayHigh": quote.get('regularMarketDayHigh'),
+            "dayLow": info.get('regularMarketDayLow') or info.get('dayLow'),
+            "dayHigh": info.get('regularMarketDayHigh') or info.get('dayHigh'),
             "eps": eps,
             "bookValuePerShare": book_value,
             "fairValue": fair_value,
@@ -95,4 +84,4 @@ def get_stock(symbol: str, response: Response):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"خطأ في جلب الأسعار اللحظية: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"خطأ في جلب البيانات: {str(e)}")
